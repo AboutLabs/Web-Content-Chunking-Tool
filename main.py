@@ -1,125 +1,115 @@
 import streamlit as st
 import requests
+from langchain.text_splitter import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 from bs4 import BeautifulSoup
-from azure.core.credentials import AzureKeyCredential
-from azure.ai.formrecognizer import DocumentAnalysisClient
-from langchain.docstore.document import Document
-from langchain.text_splitter import MarkdownHeaderTextSplitter
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-import io
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
+import re
 
-# Use secrets for Azure Form Recognizer credentials
-endpoint = st.secrets["azure"]["form_recognizer_endpoint"]
-key = st.secrets["azure"]["form_recognizer_key"]
-
-st.title("Web Scraping & Azure Document Intelligence Demo")
-
-url = "https://ppedv.de/Schulung/Kurse/MicrosoftPowerPlatformPowerAppsPowerAutomatePowerBIPowerVirtualAgentM365LowCodeSeminarTrainingWeiterbildungWorkshop"
-
-st.write("**Target URL:**", url)
-
-document_analysis_client = DocumentAnalysisClient(
-    endpoint=endpoint,
-    credential=AzureKeyCredential(key)
-)
-
-# Fetch the page content
-response = requests.get(url)
-if response.status_code == 200:
-    html_content = response.text
-
-    # Parse HTML with BeautifulSoup
-    soup = BeautifulSoup(html_content, 'html.parser')
-
-    # Extract clean text content
-    text_content = soup.get_text(separator='\n', strip=True)
-
-    st.subheader("Extracted Text Content")
-    st.write(text_content)
-
-    try:
-        # Create PDF from text
-        pdf_buffer = io.BytesIO()
-        c = canvas.Canvas(pdf_buffer, pagesize=letter)
-        
-        # Split text into lines that fit on the page
-        y = 750  # Starting y position
-        for line in text_content.split('\n'):
-            if y < 50:  # If we're near the bottom of the page
-                c.showPage()  # Start a new page
-                y = 750  # Reset y position
-            
-            # Write the line to the PDF
-            c.drawString(50, y, line[:100])  # Limit line length to prevent overflow
-            y -= 12  # Move down for next line
-        
-        c.save()
-        
-        # Move buffer position to start
-        pdf_buffer.seek(0)
-        
-        # Use the PDF file with Azure Document Intelligence
-        poller = document_analysis_client.begin_analyze_document(
-            "prebuilt-layout",
-            document=pdf_buffer
-        )
-        result = poller.result()
-
-        # Extract all text lines from the result
-        extracted_text = []
-        for page in result.pages:
-            for line in page.lines:
-                extracted_text.append(line.content)
-
-        full_text = "\n".join(extracted_text)
-
-        # Create a LangChain Document
-        doc = Document(page_content=full_text, metadata={"source": url})
-
-        st.subheader("Raw Text Extracted via Document Intelligence")
-        st.text(full_text)
-
-        st.subheader("LangChain Document")
-        st.write(doc)
-
-        # Split text into chunks with defined headers
-        headers_to_split_on = [
-            ("#", "Header 1"),
-            ("##", "Header 2"),
-            ("###", "Header 3"),
-        ]
-        splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
-        
+# Get the URL from user input
+url = st.text_input("Enter the webpage URL:")
+if url:
+    if not url.startswith(('http://', 'https://')):
+        st.error("Please enter a valid URL starting with http:// or https://")
+    else:
         try:
-            chunks = splitter.split_text(doc.page_content)
+            # Make the HTTP request
+            response = requests.get(url)
             
-            st.subheader("Chunked Documents (via MarkdownHeaderTextSplitter)")
-            for i, chunk in enumerate(chunks):
-                st.write(f"**Chunk {i}:**")
-                st.write(chunk)
+            if response.status_code == 200:
+                html_content = response.text
+                soup = BeautifulSoup(html_content, 'html.parser')
+                
+                # Remove unwanted elements
+                for element in soup.find_all(['script', 'style', 'nav', 'footer']):
+                    element.decompose()
+                
+                # Convert headings to markdown format
+                for i in range(1, 7):
+                    for heading in soup.find_all(f'h{i}'):
+                        heading.string = f"{'#' * i} {heading.get_text()}\n"
+                
+                # Process paragraphs and other content
+                for p in soup.find_all('p'):
+                    p.string = f"{p.get_text()}\n\n"
+                
+                # Extract structured text content
+                text_content = soup.get_text(separator='\n', strip=True)
+                
+                # Clean up multiple newlines and spaces
+                text_content = re.sub(r'\n\s*\n', '\n\n', text_content)
+                
+                st.subheader("Extracted Text Content")
+                st.write(text_content)
+
+                try:
+                    # Create PDF and process with Azure DI as before...
+                    # After getting the document content in doc.page_content:
+
+                    # First, split by headers
+                    headers_to_split_on = [
+                        ("#", "Title"),
+                        ("##", "Section"),
+                        ("###", "Subsection"),
+                        ("####", "Subsubsection")
+                    ]
+
+                    header_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
+
+                    # Then use recursive splitter for long sections
+                    recursive_splitter = RecursiveCharacterTextSplitter(
+                        chunk_size=500,
+                        chunk_overlap=50,
+                        separators=["\n\n", "\n", ". ", " ", ""],
+                        length_function=len,
+                    )
+
+                    try:
+                        # First split by headers
+                        header_chunks = header_splitter.split_text(text_content)
+
+                        final_chunks = []
+                        # Then split large sections into smaller chunks while preserving headers
+                        for chunk in header_chunks:
+                            # Keep the metadata (headers)
+                            chunk_metadata = chunk.metadata
+                            chunk_content = chunk.page_content
+
+                            # If the chunk is too large, split it further
+                            if len(chunk_content) > 500:
+                                smaller_chunks = recursive_splitter.split_text(chunk_content)
+                                # Add the header metadata to each sub-chunk
+                                for small_chunk in smaller_chunks:
+                                    final_chunks.append(Document(
+                                        page_content=small_chunk,
+                                        metadata=chunk_metadata
+                                    ))
+                            else:
+                                final_chunks.append(chunk)
+
+                        st.subheader("Structured Document Chunks")
+                        for i, chunk in enumerate(final_chunks):
+                            st.markdown("---")
+                            st.markdown(f"**Chunk {i+1}**")
+                            # Display the headers if present
+                            for header_type, header_content in chunk.metadata.items():
+                                st.markdown(f"*{header_type}*: {header_content}")
+                            st.markdown("**Content:**")
+                            st.write(chunk.page_content)
+
+                    except Exception as e:
+                        st.write("No headers found. Using recursive splitting only.")
+                        chunks = recursive_splitter.split_text(text_content)
+
+                        st.subheader("Document Chunks (Content-based)")
+                        for i, chunk in enumerate(chunks):
+                            st.markdown("---")
+                            st.markdown(f"**Chunk {i+1}:**")
+                            st.write(chunk)
+
+                except Exception as e:
+                    st.error(f"Error processing document: {str(e)}")
+
+            else:
+                st.error(f"Failed to fetch the webpage. Status code: {response.status_code}")
+                
         except Exception as e:
-            st.write("No headers found in the text. Using the full text as one chunk.")
-            st.write(doc)
-
-        # Alternative approach using RecursiveCharacterTextSplitter
-        # text_splitter = RecursiveCharacterTextSplitter(
-        #     chunk_size=1000,
-        #     chunk_overlap=200,
-        #     length_function=len,
-        # )
-        
-        # chunks = text_splitter.split_text(doc.page_content)
-        
-        # st.subheader("Chunked Documents")
-        # for i, chunk in enumerate(chunks):
-        #     st.write(f"**Chunk {i}:**")
-        #     st.write(chunk)
-
-    except Exception as e:
-        # Fixed error display
-        st.error(f"Error processing document: {str(e)}")
-
-else:
-    st.error(f"Failed to fetch URL. Status code: {response.status_code}")
+            st.error(f"Error occurred: {str(e)}")
