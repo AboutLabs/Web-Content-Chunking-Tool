@@ -3,113 +3,142 @@ import requests
 from langchain.text_splitter import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 from bs4 import BeautifulSoup
 import re
+from langchain.schema import Document
 
 # Get the URL from user input
 url = st.text_input("Enter the webpage URL:")
+
 if url:
     if not url.startswith(('http://', 'https://')):
         st.error("Please enter a valid URL starting with http:// or https://")
     else:
         try:
-            # Make the HTTP request
+            # Step 1: Fetch webpage
+            st.header("1. Fetching Webpage")
             response = requests.get(url)
-            
             if response.status_code == 200:
-                html_content = response.text
-                soup = BeautifulSoup(html_content, 'html.parser')
-                
+                st.success("Successfully fetched webpage!")
+
+                # Step 2: Initial HTML Processing
+                st.header("2. Raw HTML Content")
+                with st.expander("Show Raw HTML"):
+                    st.code(response.text[:1000] + "...", language="html")
+
+                # Step 3: BeautifulSoup Processing
+                st.header("3. HTML Cleaning")
+                soup = BeautifulSoup(response.text, 'html.parser')
+
+                # Show before cleaning
+                with st.expander("Before Cleaning"):
+                    st.code(soup.get_text()[:1000] + "...", language="text")
+
                 # Remove unwanted elements
                 for element in soup.find_all(['script', 'style', 'nav', 'footer']):
                     element.decompose()
-                
+
+                # Show after removing elements
+                with st.expander("After Removing Unwanted Elements"):
+                    st.code(soup.get_text()[:1000] + "...", language="text")
+
+                # Step 4: Converting to Markdown
+                st.header("4. Converting to Markdown Format")
+
                 # Convert headings to markdown format
                 for i in range(1, 7):
                     for heading in soup.find_all(f'h{i}'):
                         heading.string = f"{'#' * i} {heading.get_text()}\n"
-                
-                # Process paragraphs and other content
+
+                # Process paragraphs
                 for p in soup.find_all('p'):
                     p.string = f"{p.get_text()}\n\n"
-                
-                # Extract structured text content
+
+                # Extract and clean text content
                 text_content = soup.get_text(separator='\n', strip=True)
-                
-                # Clean up multiple newlines and spaces
                 text_content = re.sub(r'\n\s*\n', '\n\n', text_content)
-                
-                st.subheader("Extracted Text Content")
-                st.write(text_content)
+
+                with st.expander("Markdown Formatted Text"):
+                    st.markdown(text_content[:1000] + "...")
+
+                # Step 5: Text Splitting
+                st.header("5. Text Splitting Process")
+
+                # Header-based splitting
+                headers_to_split_on = [
+                    ("#", "Title"),
+                    ("##", "Section"),
+                    ("###", "Subsection"),
+                    ("####", "Subsubsection")
+                ]
+
+                header_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
+                recursive_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=500,
+                    chunk_overlap=50,
+                    separators=["\n\n", "\n", ". ", " ", ""],
+                    length_function=len,
+                )
 
                 try:
-                    # Create PDF and process with Azure DI as before...
-                    # After getting the document content in doc.page_content:
+                    # First split by headers
+                    st.subheader("5.1 Header-Based Splits")
+                    header_chunks = header_splitter.split_text(text_content)
 
-                    # First, split by headers
-                    headers_to_split_on = [
-                        ("#", "Title"),
-                        ("##", "Section"),
-                        ("###", "Subsection"),
-                        ("####", "Subsubsection")
-                    ]
-
-                    header_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
-
-                    # Then use recursive splitter for long sections
-                    recursive_splitter = RecursiveCharacterTextSplitter(
-                        chunk_size=500,
-                        chunk_overlap=50,
-                        separators=["\n\n", "\n", ". ", " ", ""],
-                        length_function=len,
-                    )
-
-                    try:
-                        # First split by headers
-                        header_chunks = header_splitter.split_text(text_content)
-
-                        final_chunks = []
-                        # Then split large sections into smaller chunks while preserving headers
-                        for chunk in header_chunks:
-                            # Keep the metadata (headers)
-                            chunk_metadata = chunk.metadata
-                            chunk_content = chunk.page_content
-
-                            # If the chunk is too large, split it further
-                            if len(chunk_content) > 500:
-                                smaller_chunks = recursive_splitter.split_text(chunk_content)
-                                # Add the header metadata to each sub-chunk
-                                for small_chunk in smaller_chunks:
-                                    final_chunks.append(Document(
-                                        page_content=small_chunk,
-                                        metadata=chunk_metadata
-                                    ))
-                            else:
-                                final_chunks.append(chunk)
-
-                        st.subheader("Structured Document Chunks")
-                        for i, chunk in enumerate(final_chunks):
-                            st.markdown("---")
+                    with st.expander("Show Header-Based Chunks"):
+                        for i, chunk in enumerate(header_chunks):
                             st.markdown(f"**Chunk {i+1}**")
-                            # Display the headers if present
-                            for header_type, header_content in chunk.metadata.items():
-                                st.markdown(f"*{header_type}*: {header_content}")
-                            st.markdown("**Content:**")
-                            st.write(chunk.page_content)
-
-                    except Exception as e:
-                        st.write("No headers found. Using recursive splitting only.")
-                        chunks = recursive_splitter.split_text(text_content)
-
-                        st.subheader("Document Chunks (Content-based)")
-                        for i, chunk in enumerate(chunks):
+                            st.json(chunk.metadata)
+                            st.markdown(chunk.page_content[:200] + "...")
                             st.markdown("---")
-                            st.markdown(f"**Chunk {i+1}:**")
-                            st.write(chunk)
+
+                    # Then split large sections
+                    st.subheader("5.2 Final Chunks (with recursive splitting)")
+                    final_chunks = []
+                    for chunk in header_chunks:
+                        chunk_metadata = chunk.metadata
+                        chunk_content = chunk.page_content
+
+                        if len(chunk_content) > 500:
+                            smaller_chunks = recursive_splitter.split_text(chunk_content)
+                            for small_chunk in smaller_chunks:
+                                final_chunks.append(Document(
+                                    page_content=small_chunk,
+                                    metadata=chunk_metadata
+                                ))
+                        else:
+                            final_chunks.append(chunk)
+
+                    with st.expander("Show Final Processed Chunks"):
+                        for i, chunk in enumerate(final_chunks):
+                            st.markdown(f"**Chunk {i+1}**")
+                            st.markdown("*Metadata:*")
+                            st.json(chunk.metadata)
+                            st.markdown("*Content:*")
+                            st.markdown(chunk.page_content)
+                            st.markdown("---")
 
                 except Exception as e:
-                    st.error(f"Error processing document: {str(e)}")
+                    st.warning("No headers found in the text. Using content-based splitting only.")
+                    chunks = recursive_splitter.split_text(text_content)
+
+                    with st.expander("Show Content-Based Chunks"):
+                        for i, chunk in enumerate(chunks):
+                            st.markdown(f"**Chunk {i+1}**")
+                            st.markdown(chunk)
+                            st.markdown("---")
+
+                # Step 6: Statistics
+                st.header("6. Processing Statistics")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Text Length", len(text_content))
+                with col2:
+                    st.metric("Number of Chunks", len(final_chunks))
+                with col3:
+                    avg_chunk_size = sum(len(chunk.page_content) for chunk in final_chunks) / len(final_chunks)
+                    st.metric("Avg Chunk Size", f"{avg_chunk_size:.0f}")
 
             else:
                 st.error(f"Failed to fetch the webpage. Status code: {response.status_code}")
-                
+
         except Exception as e:
             st.error(f"Error occurred: {str(e)}")
