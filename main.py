@@ -11,7 +11,7 @@ st.title("📝 Web Content Chunking Tool")
 st.subheader("Converts ppedv course websites into structured, analyzable chunks")
 
 # Get the URL from user input
-default_url = "https://ppedv.de/Schulung/Kurse/MicrosoftPowerPlatformPowerAppsPowerAutomatePowerBIPowerVirtualAgentM365LowCodeSeminarTrainingWeiterbildungWorkshop"
+default_url = "https://ppedv.de/schulung/kurse/AzureKISeminarMicrosoftBotKundenserviceKuenstlicheIntelligenzOpenAICognitiveServicesTraining"
 url = st.text_input("Enter the webpage URL:", value=default_url)
 analyze_button = st.button("Analyze")
 
