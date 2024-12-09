@@ -56,10 +56,59 @@ if url:
                 text_content = soup.get_text(separator='\n', strip=True)
                 text_content = re.sub(r'\n\s*\n', '\n\n', text_content)
 
-                with st.expander("Markdown Formatted Text"):
+                # Show markdown formatted text before section removal
+                with st.expander("Before Removing Sections"):
                     st.markdown(text_content[:1000] + "...")
 
-                # Step 5: Text Splitting
+                # Remove unwanted sections
+                sections_to_remove = [
+                    "ppedv Erfahrungen",
+                    "Weitere Kurse zum Thema",
+                    "Ihr Kontakt",
+                    "Häufige Fragen",
+                    "Ihre Vorteile",
+                    "Ihr .* Event",
+                    "my ppedv Login",
+                    "Feedback per Mail senden",
+                    "Schulungszentren",
+                    "Cookie Warnung",
+                    "Beratung via Chat"
+                ]
+
+                # Split content into lines for processing
+                lines = text_content.split('\n')
+                filtered_lines = []
+                skip_section = False
+
+                for line in lines:
+                    # Check if line is a header of sections to remove
+                    is_unwanted_section = any(
+                        re.match(f"^#+\s*{section}", line, re.IGNORECASE)
+                        for section in sections_to_remove
+                    ) or any(
+                        section.lower() in line.lower()
+                        for section in ["remember Passwort vergessen", "Cookie Warnung", "Cookies akzeptieren", "Support Chat"]
+                    )
+
+                    if is_unwanted_section:
+                        skip_section = True
+                        continue
+
+                    # Check if we've reached a new section (any header)
+                    if re.match(r'^#+\s', line) and not is_unwanted_section:
+                        skip_section = False
+
+                    if not skip_section:
+                        filtered_lines.append(line)
+
+                # Join the filtered lines back together
+                text_content = '\n'.join(filtered_lines)
+
+                # Show after removing sections
+                with st.expander("After Removing Sections"):
+                    st.markdown(text_content[:1000] + "...")
+
+                # Step 5: Text Splitting Process
                 st.header("5. Text Splitting Process")
 
                 # Header-based splitting
