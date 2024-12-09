@@ -5,10 +5,17 @@ from bs4 import BeautifulSoup
 import re
 from langchain.schema import Document
 
-# Get the URL from user input
-url = st.text_input("Enter the webpage URL:")
+# Add this at the start, right after the imports
+st.set_page_config(page_title="📝 Web Content Chunking Tool")
+st.title("📝 Web Content Chunking Tool")
+st.subheader("Converts ppedv course websites into structured, analyzable chunks")
 
-if url:
+# Get the URL from user input
+default_url = "https://ppedv.de/Schulung/Kurse/MicrosoftPowerPlatformPowerAppsPowerAutomatePowerBIPowerVirtualAgentM365LowCodeSeminarTrainingWeiterbildungWorkshop"
+url = st.text_input("Enter the webpage URL:", value=default_url)
+analyze_button = st.button("Analyze")
+
+if analyze_button:
     if not url.startswith(('http://', 'https://')):
         st.error("Please enter a valid URL starting with http:// or https://")
     else:
@@ -63,6 +70,7 @@ if url:
                 # Remove unwanted sections
                 sections_to_remove = [
                     "ppedv Erfahrungen",
+                    "Kundenbewertungen",
                     "Weitere Kurse zum Thema",
                     "Ihr Kontakt",
                     "Häufige Fragen",
